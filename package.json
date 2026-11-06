@@ -39,6 +39,7 @@
       "output": "release"
     },
     "win": {
+      "signAndEditExecutable": false,
       "target": [
         "portable",
         "nsis"
