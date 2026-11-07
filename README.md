@@ -12,20 +12,24 @@ A native desktop file organizer and SHA-256 duplicate finder built with **Electr
   - **Category + Month (`Month YYYY`):** `Documents/November 2026/`
   - **Category + Date (`YYYY-MM-DD`):** `Documents/2026-11-06/`
   - **Date Only (`YYYY-MM - Month`, `Month YYYY`, `YYYY-MM`, `YYYY-MM-DD`, or `YYYY-QN`):** Group strictly by when files were created or modified so you can find files by memory of when you downloaded or worked on them.
-- **Re-Organize Already Organized Folders**
-  - Toggle **Re-organize Subfolders** to flatten and re-sort previously organized subdirectories whenever you want to switch between Category-based and Date-based folder layouts, automatically cleaning up empty folders afterward.
+- **Smart Project & Application Folder Protection**
+  - Automatically detects and shields intact coding projects (`package.json`, `.git`, `pyproject.toml`, `.sln`, `Cargo.toml`, virtualenvs, `node_modules`, etc.), games, and unpacked portable apps (`.exe` + runtime files) so Sentinel never rips internal project files apart—plus support for pinning custom excluded folders.
+- **Accurate Date Source Modes**
+  - Choose between **Downloaded / Created** (Windows `birthtime`, default so older files downloaded today go into *this* month's folder), **Smart (Filename → Created)** (parses `YYYY-MM-DD` / `YYYYMMDD` dates from screenshots, invoices, and camera filenames), or **Date Modified**.
+- **1-Click Quick Access & Explorer Workflow**
+  - Jump straight to `Downloads`, `Desktop`, `Documents`, `Pictures`, or **Recent Folders** from the sidebar, sort preview columns (`Name`, `Status`, `Current Folder`, `Target Folder`, `Date`, `Size`), and right-click or click any row to reveal it in Windows File Explorer.
+- **Re-Organize Subfolders & Auto-Clean Empty Folders**
+  - Toggle **Re-organize Subfolders** to switch between Category-based and Date-based folder layouts at any time; leftover empty folders are automatically pruned after organizing or undoing.
 - **2-Phase SHA-256 Duplicate Finder**
   - **Phase 1:** Rapidly groups files by exact byte size, eliminating 99% of non-duplicates without disk-heavy hashing.
   - **Phase 2:** Computes cryptographic `SHA-256` hashes only for size-matched candidates, allowing safe quarantine of redundant copies with 1-click restoration.
 - **Complete Audit History & Instant Undo**
   - Every file move is logged in a local transaction ledger. Restore a **single file** via universal search or revert an **entire batch session** back to its original paths.
-- **Customizable Routing Profiles**
-  - Switch between built-in profiles (*General Purpose*, *Software Developer*, *Media & Creative Studio*, *Business & Finance*, *Desktop Declutter*) or create custom extension and regex rules.
-- **Background Auto-Watch**
-  - Optionally watch a target directory and automatically organize newly added files in real time.
-- **Safety Guarantees**
-  - Collision-safe file moves (automatically appends `_1`, `_2`, etc. instead of overwriting).
-  - Never touches hidden dot-files, OS system files (`desktop.ini`, `Thumbs.db`), or active partial downloads (`.crdownload`, `.part`, `.tmp`).
+- **Customizable Routing Profiles & Background Auto-Watch**
+  - Switch between built-in profiles (*General Purpose*, *Software Developer*, *Media & Creative Studio*, *Business & Finance*, *Desktop Declutter*), create custom rules, or watch a folder in real time.
+- **100% Offline & Hardened Safety Guarantees**
+  - Runs 100% offline in packaged builds (`asar: true`, Electron `sandbox: true`, strict CSP, zero outbound network connections).
+  - Blocks symlinks/NTFS junctions, UNC network paths, path traversal, and OS/application directories, and never overwrites or executes user files.
 
 ---
 

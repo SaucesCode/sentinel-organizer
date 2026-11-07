@@ -6,12 +6,22 @@ import { OrganizeView } from './components/OrganizeView';
 import { DuplicateHunterView } from './components/DuplicateHunterView';
 import { AuditLedgerView } from './components/AuditLedgerView';
 import { ProfileTemplatesView } from './components/ProfileTemplatesView';
-import { SystemInfo, OrganizeProfile } from './types';
+import { SystemInfo, OrganizeProfile, QuickFolderItem } from './types';
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<string>('organize');
   const [selectedDir, setSelectedDir] = useState<string>('');
   const [_systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
+  const [quickFolders, setQuickFolders] = useState<QuickFolderItem[]>([]);
+  const [recentFolders, setRecentFolders] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('sentinel_recent_dirs');
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === 'string' && p.length > 0).slice(0, 5) : [];
+    } catch {
+      return [];
+    }
+  });
   
   // Theme state: defaults to false (Light Mode)
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -59,12 +69,36 @@ export const App: React.FC = () => {
           const info = await window.sentinelAPI.getSystemInfo();
           setSystemInfo(info);
         }
+        if (window.sentinelAPI?.getQuickFolders) {
+          const qf = await window.sentinelAPI.getQuickFolders();
+          if (Array.isArray(qf)) setQuickFolders(qf);
+        }
       } catch (err) {
         console.warn('Initialization error:', err);
       }
     };
     init();
   }, []);
+
+  const handleSelectDirectory = (dir: string) => {
+    setSelectedDir(dir);
+    const trimmed = dir.trim();
+    if (!trimmed) return;
+    setRecentFolders(prev => {
+      const next = [trimmed, ...prev.filter(p => p.toLowerCase() !== trimmed.toLowerCase())].slice(0, 5);
+      try {
+        localStorage.setItem('sentinel_recent_dirs', JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  const handleQuickOpenDir = (dir: string) => {
+    handleSelectDirectory(dir);
+    if (activeTab !== 'organize' && activeTab !== 'duplicates') {
+      setActiveTab('organize');
+    }
+  };
 
   const handleUpdateProfiles = async (nextProfiles: OrganizeProfile[], nextActiveId: string) => {
     setProfiles(nextProfiles);
@@ -175,6 +209,9 @@ export const App: React.FC = () => {
           activeProfileId={activeProfileId}
           onSelectProfile={handleSelectProfile}
           selectedDir={selectedDir}
+          quickFolders={quickFolders}
+          recentFolders={recentFolders}
+          onSelectQuickDir={handleQuickOpenDir}
           isDarkMode={isDarkMode}
           onToggleTheme={toggleTheme}
         />
@@ -185,7 +222,7 @@ export const App: React.FC = () => {
           {activeTab === 'organize' && (
             <OrganizeView
               selectedDir={selectedDir}
-              onSelectDir={setSelectedDir}
+              onSelectDir={handleSelectDirectory}
               activeRules={activeProfile.rules || []}
               activeProfileName={activeProfile.name}
               onSessionComplete={() => {}}
@@ -197,7 +234,7 @@ export const App: React.FC = () => {
           {activeTab === 'duplicates' && (
             <DuplicateHunterView
               selectedDir={selectedDir}
-              onSelectDir={setSelectedDir}
+              onSelectDir={handleSelectDirectory}
               isDarkMode={isDarkMode}
             />
           )}

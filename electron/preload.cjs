@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('sentinelAPI', {
   selectDirectory: () => ipcRenderer.invoke('dialog:select-directory'),
   getSystemInfo: () => ipcRenderer.invoke('system:get-info'),
+  getQuickFolders: () => ipcRenderer.invoke('system:get-quick-folders'),
   
   // Scan & execute with optional custom rules, recursive subfolder search, and timeline strategies
   scanDirectory: (dirPath, optionsOrRules, legacyDestinationDir) => ipcRenderer.invoke('fs:scan-directory', dirPath, optionsOrRules, legacyDestinationDir),

@@ -4,13 +4,16 @@ import {
   Undo2, ExternalLink, RefreshCw, CheckCircle2, 
   FileText, FileSpreadsheet, FileImage, FileVideo, FileAudio, FileArchive, FileCode, File,
   Radio, FolderTree, List, Trash2, ChevronRight, ChevronDown, 
-  FolderPlus, CheckCheck, Folder, X, ShieldCheck, Plus
+  FolderPlus, CheckCheck, Folder, X, ShieldCheck, Plus,
+  ArrowUp, ArrowDown, ArrowUpDown
 } from 'lucide-react';
 import { 
   FileCandidate, ScanResult, ProgressData, OrganizeSession, 
   OrganizeRule, SentinelWatchStatus, SentinelWatchEvent, EmptyFolderItem,
   DateStrategy, DateSource, ProtectedFolderItem
 } from '../types';
+
+type SortField = 'name' | 'status' | 'current' | 'target' | 'date' | 'size';
 
 interface OrganizeViewProps {
   selectedDir: string;
@@ -95,6 +98,25 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
   const [excludedFolders, setExcludedFolders] = useState<string[]>([]);
   const [showProtectedModal, setShowProtectedModal] = useState<boolean>(false);
 
+  // Address bar local input (commits to selectedDir on Enter to avoid partial-keystroke scans)
+  const [addressInput, setAddressInput] = useState<string>(selectedDir);
+  useEffect(() => {
+    setAddressInput(selectedDir);
+  }, [selectedDir]);
+
+  // Column sorting state
+  const [sortField, setSortField] = useState<SortField>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDir(prev => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDir(field === 'date' || field === 'size' ? 'desc' : 'asc');
+    }
+  };
+
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [progress, setProgress] = useState<ProgressData | null>(null);
   const [lastSession, setLastSession] = useState<OrganizeSession | null>(null);
@@ -163,11 +185,24 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
       if (!window.sentinelAPI?.selectDirectory) return;
       const dir = await window.sentinelAPI.selectDirectory();
       if (dir) {
-        onSelectDir(dir);
-        handleScan(dir);
+        if (dir === selectedDir) {
+          handleScan(dir);
+        } else {
+          onSelectDir(dir);
+        }
       }
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message || 'Failed to select directory.' });
+    }
+  };
+
+  const commitAddressBar = () => {
+    const trimmed = addressInput.trim();
+    if (!trimmed) return;
+    if (trimmed === selectedDir) {
+      handleScan(trimmed);
+    } else {
+      onSelectDir(trimmed);
     }
   };
 
@@ -230,12 +265,12 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
     }
   };
 
-  // Re-scan automatically when active rules, recursive mode, date strategy, or date source change
+  // Re-scan automatically when directory, active rules, recursive mode, date strategy, or date source change
   useEffect(() => {
     if (selectedDir) {
       handleScan(selectedDir, destinationDir, includeSubfolders, dateStrategy, dateSource);
     }
-  }, [activeRules, includeSubfolders, dateStrategy, dateSource]);
+  }, [selectedDir, activeRules, includeSubfolders, dateStrategy, dateSource]);
 
   const toggleSentinelWatch = async () => {
     if (!selectedDir) {
@@ -300,13 +335,16 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
       setProgress(null);
       setLastSession(session);
       onSessionComplete(session);
+      const cleanedNote = session.cleanedEmptyCount && session.cleanedEmptyCount > 0
+        ? ` (auto-cleaned ${session.cleanedEmptyCount} empty subfolder${session.cleanedEmptyCount > 1 ? 's' : ''})`
+        : '';
       setStatusMessage({
         type: 'success',
-        text: `Moved ${session.movedCount} files into organized folders.`
+        text: `Moved ${session.movedCount} files into organized folders${cleanedNote}.`
       });
 
       setTimeout(() => {
-        handleScan(selectedDir, destinationDir, includeSubfolders, dateStrategy);
+        handleScan(selectedDir, destinationDir, includeSubfolders, dateStrategy, dateSource);
       }, 100);
     } catch (err: any) {
       setIsExecuting(false);
@@ -343,8 +381,11 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const droppedPath = (e.dataTransfer.files[0] as any).path;
       if (droppedPath) {
-        onSelectDir(droppedPath);
-        handleScan(droppedPath);
+        if (droppedPath === selectedDir) {
+          handleScan(droppedPath);
+        } else {
+          onSelectDir(droppedPath);
+        }
       }
     }
   };
@@ -505,10 +546,62 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
     return true;
   });
 
+  const sortedCandidates = useMemo(() => {
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const statusRank = (c: FileCandidate) => {
+      if (c.status === 'organized' || c.alreadyOrganized) return 2;
+      if (c.status === 'reorganize' || c.isNested) return 1;
+      return 0;
+    };
+
+    return [...filteredCandidates].sort((a, b) => {
+      let cmp = 0;
+      switch (sortField) {
+        case 'name':
+          cmp = a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        case 'status':
+          cmp = statusRank(a) - statusRank(b);
+          break;
+        case 'current': {
+          const curA = a.isNested ? (a.currentSubfolder || '') : '';
+          const curB = b.isNested ? (b.currentSubfolder || '') : '';
+          cmp = curA.localeCompare(curB, undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        }
+        case 'target':
+          cmp = (a.proposedFolder || '').localeCompare(b.proposedFolder || '', undefined, { numeric: true, sensitivity: 'base' });
+          break;
+        case 'date': {
+          const dA = a.effectiveDateIso || a.createdIso || a.modifiedIso || '';
+          const dB = b.effectiveDateIso || b.createdIso || b.modifiedIso || '';
+          cmp = dA.localeCompare(dB);
+          break;
+        }
+        case 'size':
+          cmp = a.sizeBytes - b.sizeBytes;
+          break;
+      }
+      if (cmp === 0) {
+        return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      }
+      return cmp * dir;
+    });
+  }, [filteredCandidates, sortField, sortDir]);
+
+  const renderSortIndicator = (field: SortField) => {
+    if (sortField === field) {
+      return sortDir === 'asc'
+        ? <ArrowUp className="h-3 w-3 text-blue-600 dark:text-blue-400 shrink-0" />
+        : <ArrowDown className="h-3 w-3 text-blue-600 dark:text-blue-400 shrink-0" />;
+    }
+    return <ArrowUpDown className="h-2.5 w-2.5 opacity-0 group-hover:opacity-50 shrink-0" />;
+  };
+
   const selectedCount = candidates.filter(c => c.selected).length;
 
-  // Group candidates for Grouped View
-  const groupKeys = Array.from(new Set(filteredCandidates.map(c => {
+  // Group candidates for Grouped View (preserving active column sort within each group)
+  const groupKeys = Array.from(new Set(sortedCandidates.map(c => {
     if (groupBy === 'date') {
       return c.dateGroup || 'Unspecified Timeline';
     } else if (groupBy === 'category') {
@@ -519,7 +612,7 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
   })));
 
   const groupedCandidates = groupKeys.map(key => {
-    const items = filteredCandidates.filter(c => {
+    const items = sortedCandidates.filter(c => {
       if (groupBy === 'date') {
         return (c.dateGroup || 'Unspecified Timeline') === key;
       } else if (groupBy === 'category') {
@@ -585,9 +678,9 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
             <Folder className="h-3.5 w-3.5 text-amber-500 shrink-0" />
             <input
               type="text"
-              value={selectedDir}
-              onChange={(e) => onSelectDir(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleScan(selectedDir)}
+              value={addressInput}
+              onChange={(e) => setAddressInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && commitAddressBar()}
               placeholder="Select or type a directory path (e.g. C:\Users\Downloads)..."
               className={`w-full bg-transparent text-[12px] font-mono focus:outline-none truncate ${
                 isDarkMode ? 'text-slate-200 placeholder-slate-500' : 'text-slate-800 placeholder-slate-400'
@@ -596,7 +689,7 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
             {selectedDir && (
               <div className="flex items-center gap-0.5 shrink-0">
                 <button
-                  onClick={() => handleScan(selectedDir, destinationDir, includeSubfolders, dateStrategy)}
+                  onClick={() => handleScan(selectedDir, destinationDir, includeSubfolders, dateStrategy, dateSource)}
                   disabled={isScanning}
                   className="p-1 rounded hover:bg-slate-200/70 dark:hover:bg-slate-800 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200"
                   title="Refresh Scan"
@@ -1112,25 +1205,90 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
                       <th className={`w-8 text-center border-r ${isDarkMode ? 'border-[#262b38]' : 'border-slate-200'}`}>
                         <input
                           type="checkbox"
-                          checked={filteredCandidates.length > 0 && filteredCandidates.every(c => c.selected)}
+                          checked={sortedCandidates.length > 0 && sortedCandidates.every(c => c.selected)}
                           onChange={(e) => toggleSelectAll(e.target.checked)}
                           className="rounded-[3px] border-slate-300 text-blue-600 focus:ring-0 h-3.5 w-3.5"
                         />
                       </th>
-                      <th className={`px-2.5 border-r ${isDarkMode ? 'border-[#262b38]' : 'border-slate-200'}`}>Name</th>
-                      <th className={`px-2.5 w-28 border-r ${isDarkMode ? 'border-[#262b38]' : 'border-slate-200'}`}>Status</th>
-                      <th className={`px-2.5 w-44 border-r ${isDarkMode ? 'border-[#262b38]' : 'border-slate-200'}`}>Current Folder</th>
-                      <th className={`px-2.5 border-r ${isDarkMode ? 'border-[#262b38]' : 'border-slate-200'}`}>Target Folder (Category \ Date)</th>
-                      <th className={`px-2.5 w-32 text-right border-r ${isDarkMode ? 'border-[#262b38]' : 'border-slate-200'}`}>
-                        {dateSource === 'modified' ? 'Date Modified' : dateSource === 'smart' ? 'Smart Date' : 'Date Created'}
+                      <th
+                        onClick={() => handleSort('name')}
+                        className={`group px-2.5 border-r cursor-pointer transition-colors ${
+                          isDarkMode ? 'border-[#262b38] hover:bg-[#202432]' : 'border-slate-200 hover:bg-slate-200/70'
+                        }`}
+                        title="Sort by file name"
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span>Name</span>
+                          {renderSortIndicator('name')}
+                        </div>
                       </th>
-                      <th className="px-2.5 w-24 text-right">Size</th>
+                      <th
+                        onClick={() => handleSort('status')}
+                        className={`group px-2.5 w-28 border-r cursor-pointer transition-colors ${
+                          isDarkMode ? 'border-[#262b38] hover:bg-[#202432]' : 'border-slate-200 hover:bg-slate-200/70'
+                        }`}
+                        title="Sort by organization status"
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span>Status</span>
+                          {renderSortIndicator('status')}
+                        </div>
+                      </th>
+                      <th
+                        onClick={() => handleSort('current')}
+                        className={`group px-2.5 w-44 border-r cursor-pointer transition-colors ${
+                          isDarkMode ? 'border-[#262b38] hover:bg-[#202432]' : 'border-slate-200 hover:bg-slate-200/70'
+                        }`}
+                        title="Sort by current subfolder"
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span>Current Folder</span>
+                          {renderSortIndicator('current')}
+                        </div>
+                      </th>
+                      <th
+                        onClick={() => handleSort('target')}
+                        className={`group px-2.5 border-r cursor-pointer transition-colors ${
+                          isDarkMode ? 'border-[#262b38] hover:bg-[#202432]' : 'border-slate-200 hover:bg-slate-200/70'
+                        }`}
+                        title="Sort by proposed target folder"
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span>Target Folder (Category \ Date)</span>
+                          {renderSortIndicator('target')}
+                        </div>
+                      </th>
+                      <th
+                        onClick={() => handleSort('date')}
+                        className={`group px-2.5 w-32 text-right border-r cursor-pointer transition-colors ${
+                          isDarkMode ? 'border-[#262b38] hover:bg-[#202432]' : 'border-slate-200 hover:bg-slate-200/70'
+                        }`}
+                        title="Sort by file date"
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          {renderSortIndicator('date')}
+                          <span>{dateSource === 'modified' ? 'Date Modified' : dateSource === 'smart' ? 'Smart Date' : 'Date Created'}</span>
+                        </div>
+                      </th>
+                      <th
+                        onClick={() => handleSort('size')}
+                        className={`group px-2.5 w-24 text-right border-r cursor-pointer transition-colors ${
+                          isDarkMode ? 'border-[#262b38] hover:bg-[#202432]' : 'border-slate-200 hover:bg-slate-200/70'
+                        }`}
+                        title="Sort by file size"
+                      >
+                        <div className="flex items-center justify-end gap-1">
+                          {renderSortIndicator('size')}
+                          <span>Size</span>
+                        </div>
+                      </th>
+                      <th className="w-8 text-center" title="Reveal in Explorer" />
                     </tr>
                   </thead>
                   <tbody className={`divide-y text-[12px] ${
                     isDarkMode ? 'divide-[#202430] text-slate-200' : 'divide-slate-100 text-slate-800'
                   }`}>
-                    {filteredCandidates.map(c => {
+                    {sortedCandidates.map(c => {
                       const isInPlace = c.status === 'organized' || c.alreadyOrganized;
                       const isReorganize = c.status === 'reorganize' || (c.isNested && !isInPlace);
                       const targetDisplay = (c.proposedFolder || 'Root').replace(/\//g, '\\');
@@ -1139,7 +1297,11 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
                         <tr
                           key={c.id}
                           onClick={() => toggleCandidate(c.id)}
-                          className={`h-7.5 cursor-default transition-colors ${
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            window.sentinelAPI?.openPathInExplorer?.(c.originalPath);
+                          }}
+                          className={`group h-7.5 cursor-default transition-colors ${
                             c.selected
                               ? isDarkMode ? 'bg-blue-950/25 hover:bg-blue-950/40' : 'bg-blue-50/50 hover:bg-blue-50/90'
                               : isDarkMode ? 'hover:bg-[#1e222d] opacity-65' : 'hover:bg-slate-50 opacity-65'
@@ -1156,7 +1318,7 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
                           <td className="px-2.5 max-w-[260px]">
                             <div className="flex items-center gap-2 truncate">
                               {getFileIcon(c.name)}
-                              <span className="truncate font-medium">{c.name}</span>
+                              <span className="truncate font-medium" title={c.name}>{c.name}</span>
                               {c.collision && (
                                 <span className="text-[10px] px-1 rounded bg-amber-100 text-amber-800 border border-amber-300 shrink-0">
                                   Auto-Rename
@@ -1196,6 +1358,17 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
                           </td>
                           <td className="px-2.5 text-right tabular-nums text-[11.5px] text-slate-500 dark:text-slate-400">
                             {formatSize(c.sizeBytes)}
+                          </td>
+                          <td className="w-8 text-center" onClick={(e) => e.stopPropagation()}>
+                            {window.sentinelAPI?.openPathInExplorer && (
+                              <button
+                                onClick={() => window.sentinelAPI.openPathInExplorer(c.originalPath)}
+                                className="p-1 rounded-[3px] text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-200/70 dark:hover:bg-slate-800 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+                                title="Reveal in Windows File Explorer (or right-click row)"
+                              >
+                                <ExternalLink className="h-3 w-3" />
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );
@@ -1267,7 +1440,11 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
                           <div
                             key={file.id}
                             onClick={() => toggleCandidate(file.id)}
-                            className={`h-7.5 pl-9 pr-3 flex items-center justify-between text-[12px] cursor-default ${
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              window.sentinelAPI?.openPathInExplorer?.(file.originalPath);
+                            }}
+                            className={`group h-7.5 pl-9 pr-3 flex items-center justify-between text-[12px] cursor-default ${
                               file.selected
                                 ? isDarkMode ? 'bg-blue-950/20 hover:bg-blue-950/35' : 'bg-white hover:bg-blue-50/50'
                                 : 'opacity-60 hover:bg-slate-50 dark:hover:bg-[#1a1e29]'
@@ -1282,16 +1459,28 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
                                 className="rounded-[3px] border-slate-300 text-blue-600 focus:ring-0 h-3.5 w-3.5"
                               />
                               {getFileIcon(file.name)}
-                              <span className="truncate font-medium">{file.name}</span>
+                              <span className="truncate font-medium" title={file.name}>{file.name}</span>
                               {file.isNested && (
                                 <span className="text-[10.5px] font-mono text-slate-400 truncate">
                                   (from {file.currentSubfolder?.replace(/\//g, '\\')})
                                 </span>
                               )}
                             </div>
-                            <div className="flex items-center gap-4 shrink-0 text-[11px] text-slate-500 tabular-nums">
+                            <div className="flex items-center gap-3 shrink-0 text-[11px] text-slate-500 tabular-nums">
                               <span>{(file.effectiveDateIso || file.createdIso || file.modifiedIso).slice(0, 10)}</span>
                               <span className="w-16 text-right">{formatSize(file.sizeBytes)}</span>
+                              {window.sentinelAPI?.openPathInExplorer && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    window.sentinelAPI.openPathInExplorer(file.originalPath);
+                                  }}
+                                  className="p-1 rounded-[3px] text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-200/70 dark:hover:bg-slate-800 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+                                  title="Reveal in Windows File Explorer"
+                                >
+                                  <ExternalLink className="h-3 w-3" />
+                                </button>
+                              )}
                             </div>
                           </div>
                         ))}

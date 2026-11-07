@@ -778,6 +778,26 @@ ipcMain.handle('system:get-info', async (event) => {
   };
 });
 
+ipcMain.handle('system:get-quick-folders', async (event) => {
+  assertTrustedSender(event);
+  const specs = [
+    { id: 'downloads', label: 'Downloads', key: 'downloads' },
+    { id: 'desktop', label: 'Desktop', key: 'desktop' },
+    { id: 'documents', label: 'Documents', key: 'documents' },
+    { id: 'pictures', label: 'Pictures', key: 'pictures' },
+  ];
+  const folders = [];
+  for (const spec of specs) {
+    try {
+      const p = app.getPath(spec.key);
+      if (p && !isUncOrInvalidPath(p) && fs.existsSync(p) && !isProtectedSystemPath(p)) {
+        folders.push({ id: spec.id, label: spec.label, path: path.resolve(p) });
+      }
+    } catch {}
+  }
+  return folders;
+});
+
 ipcMain.handle('profiles:get', async (event) => {
   assertTrustedSender(event);
   return loadProfilesData();
@@ -1241,6 +1261,12 @@ ipcMain.handle('fs:execute-organize', async (event, payload) => {
     }
   }
 
+  // Auto-clean leftover empty unprotected folders after moving files
+  let cleanedEmptyCount = 0;
+  if (movedCount > 0) {
+    cleanedEmptyCount = await pruneEmptyUnprotectedSubfolders(resolvedSource);
+  }
+
   const sessionData = {
     sessionId,
     timestampIso: startTimestamp,
@@ -1250,6 +1276,7 @@ ipcMain.handle('fs:execute-organize', async (event, payload) => {
     totalProcessed: candidates.length,
     movedCount,
     errorCount,
+    cleanedEmptyCount,
     profileName: profileName ? `${profileName} (${dateStrategy || 'Standard'})` : 'Default',
     status: errorCount === 0 ? 'COMPLETED' : 'COMPLETED_WITH_WARNINGS',
     records
@@ -1311,6 +1338,16 @@ ipcMain.handle('fs:undo-session', async (event, sessionId) => {
     }
   }
 
+  let cleanedEmptyCount = 0;
+  if (restoredCount > 0) {
+    if (session.destinationDirectory) {
+      cleanedEmptyCount += await pruneEmptyUnprotectedSubfolders(session.destinationDirectory);
+    }
+    if (session.sourceDirectory) {
+      cleanedEmptyCount += await pruneEmptyUnprotectedSubfolders(session.sourceDirectory);
+    }
+  }
+
   session.status = 'REVERTED';
   session.revertedAtIso = new Date().toISOString();
   session.restoredFiles = restoredCount;
@@ -1320,6 +1357,7 @@ ipcMain.handle('fs:undo-session', async (event, sessionId) => {
     sessionId,
     restoredCount,
     failureCount,
+    cleanedEmptyCount,
     status: 'REVERTED'
   };
 });
@@ -1355,6 +1393,12 @@ ipcMain.handle('fs:undo-single-file', async (event, payload) => {
   record.status = 'REVERTED';
   record.restoredPath = safeDest;
 
+  let cleanedEmptyCount = 0;
+  const targetRoot = session.destinationDirectory || session.sourceDirectory;
+  if (targetRoot) {
+    cleanedEmptyCount = await pruneEmptyUnprotectedSubfolders(targetRoot);
+  }
+
   const allReverted = session.records.every(r => r.status === 'REVERTED');
   if (allReverted) {
     session.status = 'REVERTED';
@@ -1362,7 +1406,7 @@ ipcMain.handle('fs:undo-single-file', async (event, payload) => {
   }
 
   saveLedger(ledger);
-  return { success: true, restoredPath: safeDest };
+  return { success: true, restoredPath: safeDest, cleanedEmptyCount };
 });
 
 ipcMain.handle('fs:get-audit-ledger', async (event) => {
@@ -1802,18 +1846,13 @@ ipcMain.handle('sentinel:get-status', async (event) => {
 });
 
 // ============================================================================
-// Empty Folder Janitor
+// Empty Folder Janitor & Automatic Post-Move / Post-Undo Cleanup
 // ============================================================================
 
-ipcMain.handle('fs:scan-empty-folders', async (event, dirPath) => {
-  assertTrustedSender(event);
-  if (isUncOrInvalidPath(dirPath) || !fs.existsSync(dirPath)) {
-    throw new Error('Directory does not exist');
+async function findEmptyUnprotectedSubfolders(dirPath) {
+  if (isUncOrInvalidPath(dirPath) || !fs.existsSync(dirPath) || isProtectedSystemPath(dirPath)) {
+    return [];
   }
-  if (isProtectedSystemPath(dirPath)) {
-    throw new Error('Protected system folders cannot be modified.');
-  }
-
   const excludedLowerSet = new Set(loadExcludedFolders().map(p => p.toLowerCase()));
   const emptyFolders = [];
 
@@ -1837,6 +1876,10 @@ ipcMain.handle('fs:scan-empty-folders', async (event, dirPath) => {
         if (entry.isFile()) {
           hasFiles = true;
         } else if (entry.isDirectory()) {
+          if (entry.name.toLowerCase() === QUARANTINE_DIR_NAME.toLowerCase()) {
+            hasValidSubdirs = true;
+            continue;
+          }
           const check = await detectProtectedSubfolder(full, excludedLowerSet);
           if (check.protected) {
             // Never step into or delete folders inside intact projects/apps or excluded dirs
@@ -1866,6 +1909,46 @@ ipcMain.handle('fs:scan-empty-folders', async (event, dirPath) => {
 
   await checkEmptyDir(dirPath);
   return emptyFolders;
+}
+
+async function pruneEmptyUnprotectedSubfolders(dirPath) {
+  try {
+    const emptyList = await findEmptyUnprotectedSubfolders(dirPath);
+    if (!emptyList.length) return 0;
+
+    const excludedLowerSet = new Set(loadExcludedFolders().map(p => p.toLowerCase()));
+    const sorted = emptyList.map(e => e.path).sort((a, b) => b.length - a.length);
+    let deletedCount = 0;
+
+    for (const fPath of sorted) {
+      if (isProtectedSystemPath(fPath) || isSamePath(fPath, dirPath)) continue;
+      try {
+        if (fs.existsSync(fPath)) {
+          const st = await fsPromises.lstat(fPath);
+          if (st.isSymbolicLink() || !st.isDirectory()) continue;
+          const check = await detectProtectedSubfolder(fPath, excludedLowerSet);
+          if (check.protected) continue;
+
+          await fsPromises.rmdir(fPath);
+          deletedCount++;
+        }
+      } catch {}
+    }
+    return deletedCount;
+  } catch {
+    return 0;
+  }
+}
+
+ipcMain.handle('fs:scan-empty-folders', async (event, dirPath) => {
+  assertTrustedSender(event);
+  if (isUncOrInvalidPath(dirPath) || !fs.existsSync(dirPath)) {
+    throw new Error('Directory does not exist');
+  }
+  if (isProtectedSystemPath(dirPath)) {
+    throw new Error('Protected system folders cannot be modified.');
+  }
+  return findEmptyUnprotectedSubfolders(dirPath);
 });
 
 ipcMain.handle('fs:delete-empty-folders', async (event, folderPaths) => {

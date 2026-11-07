@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   FolderOpen, RefreshCw, ExternalLink, Archive, CheckCircle2, 
   AlertCircle, Copy, FolderPlus, Check, Folder, X
@@ -23,6 +23,11 @@ export const DuplicateHunterView: React.FC<DuplicateHunterViewProps> = ({
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   const [priorityFilter, setPriorityFilter] = useState<string>('');
+  const [addressInput, setAddressInput] = useState<string>(selectedDir);
+
+  useEffect(() => {
+    setAddressInput(selectedDir);
+  }, [selectedDir]);
 
   const formatSize = (bytes: number): string => {
     if (bytes === 0) return '0 B';
@@ -232,9 +237,14 @@ export const DuplicateHunterView: React.FC<DuplicateHunterViewProps> = ({
             <Folder className="h-3.5 w-3.5 text-amber-500 shrink-0" />
             <input
               type="text"
-              value={selectedDir}
-              onChange={(e) => onSelectDir(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleScan(selectedDir)}
+              value={addressInput}
+              onChange={(e) => setAddressInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && addressInput.trim()) {
+                  onSelectDir(addressInput.trim());
+                  handleScan(addressInput.trim());
+                }
+              }}
               placeholder="Select folder to scan for duplicate files..."
               className={`w-full bg-transparent text-[12px] font-mono focus:outline-none truncate ${
                 isDarkMode ? 'text-slate-200 placeholder-slate-500' : 'text-slate-800 placeholder-slate-400'
@@ -243,8 +253,14 @@ export const DuplicateHunterView: React.FC<DuplicateHunterViewProps> = ({
           </div>
 
           <button
-            onClick={() => handleScan(selectedDir)}
-            disabled={isScanning || !selectedDir}
+            onClick={() => {
+              const target = addressInput.trim() || selectedDir;
+              if (target) {
+                onSelectDir(target);
+                handleScan(target);
+              }
+            }}
+            disabled={isScanning || (!addressInput.trim() && !selectedDir)}
             className={`h-7 px-3 rounded-[4px] border text-[12px] font-medium flex items-center gap-1.5 shrink-0 disabled:opacity-40 ${controlBtn}`}
           >
             <RefreshCw className={`h-3.5 w-3.5 ${isScanning ? 'animate-spin text-blue-600' : ''}`} />

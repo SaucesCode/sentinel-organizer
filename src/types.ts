@@ -105,6 +105,7 @@ export interface OrganizeSession {
   totalProcessed: number;
   movedCount: number;
   errorCount: number;
+  cleanedEmptyCount?: number;
   profileName?: string;
   status: 'COMPLETED' | 'COMPLETED_WITH_WARNINGS' | 'REVERTED';
   revertedAtIso?: string;
@@ -161,6 +162,12 @@ export interface EmptyFolderItem {
   name: string;
 }
 
+export interface QuickFolderItem {
+  id: string;
+  label: string;
+  path: string;
+}
+
 export interface SystemInfo {
   osPlatform: string;
   osRelease: string;
@@ -174,11 +181,12 @@ declare global {
     sentinelAPI: {
       selectDirectory: () => Promise<string | null>;
       getSystemInfo: () => Promise<SystemInfo>;
+      getQuickFolders: () => Promise<QuickFolderItem[]>;
       scanDirectory: (dirPath: string, optionsOrRules?: ScanOptions | OrganizeRule[], legacyDestinationDir?: string) => Promise<ScanResult>;
       executeOrganize: (payload: { dirPath: string; destinationDir?: string; candidates: FileCandidate[]; organizeByChronology?: boolean; dateStrategy?: DateStrategy; profileName?: string }) => Promise<OrganizeSession>;
       getAuditLedger: () => Promise<AuditLedger>;
-      undoSession: (sessionId: string) => Promise<{ sessionId: string; restoredCount: number; failureCount: number; status: string }>;
-      undoSingleFile: (payload: { sessionId: string; fileId: string }) => Promise<{ success: boolean; restoredPath: string }>;
+      undoSession: (sessionId: string) => Promise<{ sessionId: string; restoredCount: number; failureCount: number; cleanedEmptyCount?: number; status: string }>;
+      undoSingleFile: (payload: { sessionId: string; fileId: string }) => Promise<{ success: boolean; restoredPath: string; cleanedEmptyCount?: number }>;
       scanDuplicates: (dirPath: string) => Promise<{ scannedRoot: string; duplicateGroupsCount: number; duplicates: DuplicateGroup[] }>;
       resolveDuplicates: (payload: { filesToQuarantine: string[]; targetDir: string }) => Promise<{ quarantineDir: string; results: any[]; sessionId?: string }>;
       getProfiles: () => Promise<{ profiles: OrganizeProfile[]; activeProfileId: string }>;

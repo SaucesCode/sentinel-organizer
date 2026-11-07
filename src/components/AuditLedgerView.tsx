@@ -49,9 +49,10 @@ export const AuditLedgerView: React.FC<AuditLedgerViewProps> = ({
     setStatusMessage(null);
     try {
       const res = await window.sentinelAPI.undoSession(session.sessionId);
+      const emptyNote = res.cleanedEmptyCount ? ` (cleaned ${res.cleanedEmptyCount} empty subfolder${res.cleanedEmptyCount > 1 ? 's' : ''})` : '';
       setStatusMessage({
         type: 'success',
-        text: `Restored ${res.restoredCount} files from session back to original directories.`
+        text: `Restored ${res.restoredCount} files back to original directories${emptyNote}.`
       });
       if (onSessionReverted) onSessionReverted(session.sessionId);
       await fetchLedger();
@@ -67,10 +68,11 @@ export const AuditLedgerView: React.FC<AuditLedgerViewProps> = ({
     setRevertingFileId(record.fileId);
     setStatusMessage(null);
     try {
-      await window.sentinelAPI.undoSingleFile({ sessionId, fileId: record.fileId });
+      const res = await window.sentinelAPI.undoSingleFile({ sessionId, fileId: record.fileId });
+      const emptyNote = res.cleanedEmptyCount ? ` (cleaned ${res.cleanedEmptyCount} empty subfolder${res.cleanedEmptyCount > 1 ? 's' : ''})` : '';
       setStatusMessage({
         type: 'success',
-        text: `Restored "${record.originalName}" back to original directory.`
+        text: `Restored "${record.originalName}" back to original directory${emptyNote}.`
       });
       await fetchLedger();
     } catch (err: any) {
