@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { HardDrive, Layers, Radio, CheckCircle2 } from 'lucide-react';
+import { HardDrive, Layers, Radio, CheckCircle2, ShieldCheck } from 'lucide-react';
 import { SentinelWatchStatus } from '../types';
 
 interface StatusBarProps {
@@ -90,6 +90,16 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       </div>
 
       <div className="flex items-center h-full">
+        <div
+          className={`flex items-center gap-1.5 px-3 h-full border-r ${
+            isDarkMode ? 'border-[#242936] text-slate-400' : 'border-slate-300/80 text-slate-600'
+          }`}
+          title="100% Offline Air-Gapped Mode • Chromium OS Sandbox • Symlink & App-Tamper Protection Active"
+        >
+          <ShieldCheck className="h-3 w-3 text-emerald-600 dark:text-emerald-500 shrink-0" />
+          <span>Offline & Sandboxed</span>
+        </div>
+
         {watchStatus?.isWatching ? (
           <div className="flex items-center gap-1.5 pl-3 text-rose-600 dark:text-rose-400 font-medium tabular-nums">
             <Radio className="h-3 w-3 animate-pulse" />

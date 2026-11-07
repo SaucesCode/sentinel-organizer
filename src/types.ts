@@ -13,6 +13,8 @@ export type DateStrategy =
   | 'exact-date' 
   | 'flatten';
 
+export type DateSource = 'created' | 'modified' | 'smart';
+
 export type FileCandidateStatus = 'organized' | 'reorganize' | 'loose';
 
 export interface FileCandidate {
@@ -22,6 +24,7 @@ export interface FileCandidate {
   sizeBytes: number;
   modifiedIso: string;
   createdIso: string;
+  effectiveDateIso?: string;
   ageDays: number;
   proposedFolder: string;
   proposedPath: string;
@@ -41,6 +44,15 @@ export interface ScanOptions {
   destinationDir?: string;
   includeSubfolders?: boolean;
   dateStrategy?: DateStrategy;
+  dateSource?: DateSource;
+}
+
+export interface ProtectedFolderItem {
+  path: string;
+  relativePath: string;
+  name: string;
+  reason: string;
+  autoDetected: boolean;
 }
 
 export interface ScanResult {
@@ -51,6 +63,7 @@ export interface ScanResult {
   totalFiles: number;
   totalBytes: number;
   candidates: FileCandidate[];
+  protectedFolders?: ProtectedFolderItem[];
 }
 
 export interface OrganizeRule {
@@ -174,13 +187,17 @@ declare global {
       openPathInExplorer: (targetPath: string) => Promise<boolean>;
       setWindowTheme?: (isDark: boolean) => Promise<boolean>;
       // Live Sentinel Watcher
-      startSentinelWatch: (dirPath: string, options?: { destinationDir?: string; organizeByChronology?: boolean; dateStrategy?: DateStrategy }) => Promise<{ success: boolean; watchedDir: string }>;
+      startSentinelWatch: (dirPath: string, options?: { destinationDir?: string; organizeByChronology?: boolean; dateStrategy?: DateStrategy; dateSource?: DateSource }) => Promise<{ success: boolean; watchedDir: string }>;
       stopSentinelWatch: () => Promise<{ success: boolean }>;
       getSentinelStatus: () => Promise<SentinelWatchStatus>;
       onSentinelEvent: (callback: (event: SentinelWatchEvent) => void) => () => void;
       // Empty Folder Janitor
       scanEmptyFolders: (dirPath: string) => Promise<EmptyFolderItem[]>;
       deleteEmptyFolders: (folderPaths: string[]) => Promise<{ deletedCount: number }>;
+      // Protected & Excluded Subfolders
+      getExcludedFolders: () => Promise<string[]>;
+      addExcludedFolder: (payload?: string | { folderPath?: string; browseFromDir?: string }) => Promise<{ added: string | null; excludedFolders: string[] }>;
+      removeExcludedFolder: (folderPath: string) => Promise<string[]>;
     };
   }
 }

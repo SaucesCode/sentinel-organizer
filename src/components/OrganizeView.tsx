@@ -4,12 +4,12 @@ import {
   Undo2, ExternalLink, RefreshCw, CheckCircle2, 
   FileText, FileSpreadsheet, FileImage, FileVideo, FileAudio, FileArchive, FileCode, File,
   Radio, FolderTree, List, Trash2, ChevronRight, ChevronDown, 
-  FolderPlus, CheckCheck, Folder, X
+  FolderPlus, CheckCheck, Folder, X, ShieldCheck, Plus
 } from 'lucide-react';
 import { 
   FileCandidate, ScanResult, ProgressData, OrganizeSession, 
   OrganizeRule, SentinelWatchStatus, SentinelWatchEvent, EmptyFolderItem,
-  DateStrategy
+  DateStrategy, DateSource, ProtectedFolderItem
 } from '../types';
 
 interface OrganizeViewProps {
@@ -56,6 +56,8 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
   
   // Reorganize by Category & Date Strategy (Default: Category First, Year in Month folder)
   const [dateStrategy, setDateStrategy] = useState<DateStrategy>('category-year-month');
+  // Which file timestamp determines the date folder (Default: Downloaded / Created on this PC)
+  const [dateSource, setDateSource] = useState<DateSource>('created');
   // Include already organized nested subfolders
   const [includeSubfolders, setIncludeSubfolders] = useState<boolean>(true);
   // Grouping in the grouped view
@@ -87,6 +89,11 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
   const [emptyFolders, setEmptyFolders] = useState<EmptyFolderItem[]>([]);
   const [isScanningEmpty, setIsScanningEmpty] = useState<boolean>(false);
   const [isPurgingEmpty, setIsPurgingEmpty] = useState<boolean>(false);
+
+  // Smart Protected & Excluded Folders state
+  const [protectedFolders, setProtectedFolders] = useState<ProtectedFolderItem[]>([]);
+  const [excludedFolders, setExcludedFolders] = useState<string[]>([]);
+  const [showProtectedModal, setShowProtectedModal] = useState<boolean>(false);
 
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
   const [progress, setProgress] = useState<ProgressData | null>(null);
@@ -121,6 +128,12 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
     if (window.sentinelAPI?.getSentinelStatus) {
       window.sentinelAPI.getSentinelStatus().then(status => {
         if (status) setSentinelStatus(status);
+      }).catch(() => {});
+    }
+
+    if (window.sentinelAPI?.getExcludedFolders) {
+      window.sentinelAPI.getExcludedFolders().then(list => {
+        if (Array.isArray(list)) setExcludedFolders(list);
       }).catch(() => {});
     }
 
@@ -177,7 +190,8 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
     dirToScan = selectedDir, 
     targetLibrary = destinationDir, 
     recursive = includeSubfolders, 
-    strat = dateStrategy
+    strat = dateStrategy,
+    src = dateSource
   ) => {
     if (!dirToScan) return;
     setIsScanning(true);
@@ -187,32 +201,41 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
         rules: activeRules,
         destinationDir: targetLibrary || undefined,
         includeSubfolders: recursive,
-        dateStrategy: strat
+        dateStrategy: strat,
+        dateSource: src
       });
       setScanResult(result);
       setCandidates(result.candidates);
+      setProtectedFolders(result.protectedFolders || []);
       
       const allGroups = new Set(result.candidates.map(c => c.proposedFolder || 'Root Folder'));
       setExpandedTreeFolders(allGroups);
 
       if (result.candidates.length === 0) {
-        setStatusMessage({ type: 'info', text: 'Folder is empty.' });
+        const protCount = result.protectedFolders?.length || 0;
+        setStatusMessage({
+          type: 'info',
+          text: protCount > 0
+            ? `No loose files to move (${protCount} intact project/app folder${protCount > 1 ? 's' : ''} safely protected).`
+            : 'Folder is empty.'
+        });
       }
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: err.message || 'Error scanning directory.' });
       setScanResult(null);
       setCandidates([]);
+      setProtectedFolders([]);
     } finally {
       setIsScanning(false);
     }
   };
 
-  // Re-scan automatically when active rules, recursive mode or date strategy change
+  // Re-scan automatically when active rules, recursive mode, date strategy, or date source change
   useEffect(() => {
     if (selectedDir) {
-      handleScan(selectedDir, destinationDir, includeSubfolders, dateStrategy);
+      handleScan(selectedDir, destinationDir, includeSubfolders, dateStrategy, dateSource);
     }
-  }, [activeRules, includeSubfolders, dateStrategy]);
+  }, [activeRules, includeSubfolders, dateStrategy, dateSource]);
 
   const toggleSentinelWatch = async () => {
     if (!selectedDir) {
@@ -233,7 +256,8 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
       } else {
         await window.sentinelAPI.startSentinelWatch(selectedDir, {
           destinationDir: destinationDir || undefined,
-          dateStrategy
+          dateStrategy,
+          dateSource
         });
         setSentinelStatus({
           isWatching: true,
@@ -359,6 +383,44 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
       setStatusMessage({ type: 'error', text: err.message || 'Failed to delete empty folders.' });
     } finally {
       setIsPurgingEmpty(false);
+    }
+  };
+
+  const handleOpenProtectedModal = async () => {
+    try {
+      if (window.sentinelAPI?.getExcludedFolders) {
+        const list = await window.sentinelAPI.getExcludedFolders();
+        setExcludedFolders(list || []);
+      }
+    } catch {}
+    setShowProtectedModal(true);
+  };
+
+  const handleAddExcludedFolder = async () => {
+    try {
+      if (!window.sentinelAPI?.addExcludedFolder) return;
+      const res = await window.sentinelAPI.addExcludedFolder({ browseFromDir: selectedDir || undefined });
+      if (res?.excludedFolders) {
+        setExcludedFolders(res.excludedFolders);
+        if (res.added && selectedDir) {
+          handleScan(selectedDir, destinationDir, includeSubfolders, dateStrategy);
+        }
+      }
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'Could not exclude folder.' });
+    }
+  };
+
+  const handleRemoveExcludedFolder = async (folderPath: string) => {
+    try {
+      if (!window.sentinelAPI?.removeExcludedFolder) return;
+      const updated = await window.sentinelAPI.removeExcludedFolder(folderPath);
+      setExcludedFolders(updated || []);
+      if (selectedDir) {
+        handleScan(selectedDir, destinationDir, includeSubfolders, dateStrategy);
+      }
+    } catch (err: any) {
+      setStatusMessage({ type: 'error', text: err.message || 'Could not remove exclusion.' });
     }
   };
 
@@ -558,6 +620,23 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
         {/* Right Action Controls */}
         <div className="flex items-center gap-1.5 shrink-0">
           <button
+            onClick={handleOpenProtectedModal}
+            className={`h-7 px-2.5 rounded-[4px] border text-[12px] flex items-center gap-1.5 transition-colors tabular-nums ${
+              protectedFolders.length > 0
+                ? isDarkMode
+                  ? 'bg-emerald-950/35 hover:bg-emerald-950/55 text-emerald-300 border-emerald-800/60'
+                  : 'bg-emerald-50 hover:bg-emerald-100/80 text-emerald-800 border-emerald-300'
+                : controlBtn
+            }`}
+            title="View auto-protected project/app folders and manage excluded folders"
+          >
+            <ShieldCheck className={`h-3.5 w-3.5 ${protectedFolders.length > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500'}`} />
+            <span>
+              Protected{protectedFolders.length > 0 ? ` (${protectedFolders.length})` : ''}
+            </span>
+          </button>
+
+          <button
             onClick={handleOpenJanitor}
             disabled={!selectedDir}
             className={`h-7 px-2.5 rounded-[4px] border text-[12px] flex items-center gap-1.5 transition-colors disabled:opacity-40 ${controlBtn}`}
@@ -630,6 +709,27 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
 
           <div className={`h-4 w-[1px] shrink-0 ${isDarkMode ? 'bg-[#2a3040]' : 'bg-slate-300'}`} />
 
+          {/* Date Source Selector */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-slate-500 dark:text-slate-400 font-medium">Date Source:</span>
+            <select
+              value={dateSource}
+              onChange={(e) => setDateSource(e.target.value as DateSource)}
+              className={`h-6.5 rounded-[4px] px-2 text-[12px] border focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                isDarkMode 
+                  ? 'bg-[#181c26] border-[#2e3546] text-slate-200' 
+                  : 'bg-white border-slate-300 text-slate-800'
+              }`}
+              title="Choose which timestamp places files into date folders"
+            >
+              <option value="created">Downloaded / Created</option>
+              <option value="smart">Smart (Filename → Created)</option>
+              <option value="modified">Date Modified</option>
+            </select>
+          </div>
+
+          <div className={`h-4 w-[1px] shrink-0 ${isDarkMode ? 'bg-[#2a3040]' : 'bg-slate-300'}`} />
+
           {/* Recursive Subfolder Toggle */}
           <label className="flex items-center gap-1.5 cursor-pointer shrink-0 text-slate-700 dark:text-slate-300">
             <input
@@ -638,7 +738,7 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
               onChange={(e) => setIncludeSubfolders(e.target.checked)}
               className="rounded-[3px] border-slate-300 text-blue-600 focus:ring-0 h-3.5 w-3.5"
             />
-            <span>Include subfolders (reorganize existing folders)</span>
+            <span>Re-organize Subfolders</span>
           </label>
 
           <div className={`h-4 w-[1px] shrink-0 ${isDarkMode ? 'bg-[#2a3040]' : 'bg-slate-300'}`} />
@@ -920,6 +1020,27 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
               )}
             </div>
           </div>
+
+          {/* Section 3: Protected Project / App Folders Footer */}
+          <button
+            onClick={handleOpenProtectedModal}
+            className={`px-2.5 py-2 border-t flex items-center justify-between text-left transition-colors ${
+              isDarkMode
+                ? 'border-[#262b38] hover:bg-[#1c202c] text-slate-300'
+                : 'border-slate-200 hover:bg-slate-200/50 text-slate-700'
+            }`}
+            title="Manage protected project/app folders and custom exclusions"
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <ShieldCheck className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span className="text-[11.5px] font-medium truncate">
+                {protectedFolders.length > 0
+                  ? `${protectedFolders.length} Protected Folder${protectedFolders.length > 1 ? 's' : ''}`
+                  : 'Folder Protection Active'}
+              </span>
+            </div>
+            <span className="text-[10.5px] text-blue-600 dark:text-blue-400 shrink-0">Manage</span>
+          </button>
         </div>
 
         {/* Right Main Pane: File Details ListView / Grouped View */}
@@ -1000,7 +1121,9 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
                       <th className={`px-2.5 w-28 border-r ${isDarkMode ? 'border-[#262b38]' : 'border-slate-200'}`}>Status</th>
                       <th className={`px-2.5 w-44 border-r ${isDarkMode ? 'border-[#262b38]' : 'border-slate-200'}`}>Current Folder</th>
                       <th className={`px-2.5 border-r ${isDarkMode ? 'border-[#262b38]' : 'border-slate-200'}`}>Target Folder (Category \ Date)</th>
-                      <th className={`px-2.5 w-28 text-right border-r ${isDarkMode ? 'border-[#262b38]' : 'border-slate-200'}`}>Date Modified</th>
+                      <th className={`px-2.5 w-32 text-right border-r ${isDarkMode ? 'border-[#262b38]' : 'border-slate-200'}`}>
+                        {dateSource === 'modified' ? 'Date Modified' : dateSource === 'smart' ? 'Smart Date' : 'Date Created'}
+                      </th>
                       <th className="px-2.5 w-24 text-right">Size</th>
                     </tr>
                   </thead>
@@ -1069,7 +1192,7 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
                             </div>
                           </td>
                           <td className="px-2.5 text-right tabular-nums text-[11.5px] text-slate-500 dark:text-slate-400">
-                            {c.modifiedIso.slice(0, 10)}
+                            {(c.effectiveDateIso || c.createdIso || c.modifiedIso).slice(0, 10)}
                           </td>
                           <td className="px-2.5 text-right tabular-nums text-[11.5px] text-slate-500 dark:text-slate-400">
                             {formatSize(c.sizeBytes)}
@@ -1167,7 +1290,7 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
                               )}
                             </div>
                             <div className="flex items-center gap-4 shrink-0 text-[11px] text-slate-500 tabular-nums">
-                              <span>{file.modifiedIso.slice(0, 10)}</span>
+                              <span>{(file.effectiveDateIso || file.createdIso || file.modifiedIso).slice(0, 10)}</span>
                               <span className="w-16 text-right">{formatSize(file.sizeBytes)}</span>
                             </div>
                           </div>
@@ -1242,6 +1365,128 @@ export const OrganizeView: React.FC<OrganizeViewProps> = ({
                     {isPurgingEmpty ? 'Removing...' : `Remove All (${emptyFolders.length})`}
                   </button>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Protected & Excluded Folders Dialog */}
+      {showProtectedModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className={`border rounded-[6px] w-full max-w-lg shadow-xl overflow-hidden ${
+            isDarkMode ? 'bg-[#181b24] border-[#2d3446] text-slate-200' : 'bg-white border-slate-300 text-slate-800'
+          }`}>
+            <div className={`px-4 py-2.5 border-b flex items-center justify-between ${
+              isDarkMode ? 'bg-[#141720] border-[#262b38]' : 'bg-[#f3f4f6] border-slate-200'
+            }`}>
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                <h3 className="text-[12.5px] font-semibold">Protected & Excluded Subfolders</h3>
+              </div>
+              <button onClick={() => setShowProtectedModal(false)} className="text-slate-400 hover:text-slate-700">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-4 max-h-[75vh] overflow-y-auto">
+              {/* Auto-Protected in Current Scan */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11.5px] font-semibold text-slate-700 dark:text-slate-200">
+                    Protected Inside Current Folder ({protectedFolders.length})
+                  </span>
+                </div>
+                <p className="text-[11.5px] text-slate-500 dark:text-slate-400 mb-2">
+                  Sentinel automatically detects intact coding projects, Git repositories, games, and portable applications (<code>.exe</code> + runtime files) and leaves them untouched during reorganization, duplicate scanning, and empty-folder cleanup.
+                </p>
+
+                {protectedFolders.length === 0 ? (
+                  <div className={`py-3 px-3 rounded-[4px] border text-[11.5px] text-slate-500 ${
+                    isDarkMode ? 'bg-[#111318] border-[#262b38]' : 'bg-slate-50 border-slate-200'
+                  }`}>
+                    {selectedDir
+                      ? 'No project or application subfolders detected in the current folder.'
+                      : 'Open a folder first to inspect protected subfolders.'}
+                  </div>
+                ) : (
+                  <div className={`max-h-40 overflow-y-auto border rounded-[4px] divide-y ${
+                    isDarkMode ? 'bg-[#111318] border-[#262b38] divide-[#1e2330]' : 'bg-slate-50 border-slate-200 divide-slate-200/70'
+                  }`}>
+                    {protectedFolders.map(pf => (
+                      <div key={pf.path} className="px-2.5 py-1.5 flex items-center justify-between gap-2 text-[11.5px]">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <Folder className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          <span className="font-mono truncate" title={pf.path}>
+                            \{pf.relativePath}
+                          </span>
+                        </div>
+                        <span className={`px-1.5 py-0.5 rounded-[3px] text-[10px] font-medium border shrink-0 ${
+                          pf.autoDetected
+                            ? isDarkMode ? 'bg-emerald-950/40 text-emerald-300 border-emerald-800/50' : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            : isDarkMode ? 'bg-blue-950/40 text-blue-300 border-blue-800/50' : 'bg-blue-50 text-blue-800 border-blue-200'
+                        }`}>
+                          {pf.reason}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Custom Pinned / Excluded Folders */}
+              <div className="pt-2 border-t border-slate-200 dark:border-[#262b38]">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11.5px] font-semibold text-slate-700 dark:text-slate-200">
+                    Manually Excluded Folders ({excludedFolders.length})
+                  </span>
+                  <button
+                    onClick={handleAddExcludedFolder}
+                    className="h-6.5 px-2.5 rounded-[4px] bg-blue-600 hover:bg-blue-700 text-white text-[11.5px] font-medium flex items-center gap-1"
+                  >
+                    <Plus className="h-3 w-3" />
+                    <span>Exclude Folder...</span>
+                  </button>
+                </div>
+                <p className="text-[11.5px] text-slate-500 dark:text-slate-400 mb-2">
+                  Pin any custom folder here so Sentinel never enters, moves, or modifies anything inside it.
+                </p>
+
+                {excludedFolders.length === 0 ? (
+                  <div className={`py-3 px-3 rounded-[4px] border text-[11.5px] text-slate-500 ${
+                    isDarkMode ? 'bg-[#111318] border-[#262b38]' : 'bg-slate-50 border-slate-200'
+                  }`}>
+                    No custom excluded folders added yet.
+                  </div>
+                ) : (
+                  <div className={`max-h-36 overflow-y-auto border rounded-[4px] divide-y ${
+                    isDarkMode ? 'bg-[#111318] border-[#262b38] divide-[#1e2330]' : 'bg-slate-50 border-slate-200 divide-slate-200/70'
+                  }`}>
+                    {excludedFolders.map(folderPath => (
+                      <div key={folderPath} className="px-2.5 py-1.5 flex items-center justify-between gap-2 text-[11.5px]">
+                        <span className="font-mono truncate text-slate-700 dark:text-slate-300" title={folderPath}>
+                          {folderPath}
+                        </span>
+                        <button
+                          onClick={() => handleRemoveExcludedFolder(folderPath)}
+                          className="text-[11px] text-rose-600 hover:underline shrink-0"
+                          title="Remove from excluded list"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end pt-2 border-t border-slate-200 dark:border-[#262b38]">
+                <button
+                  onClick={() => setShowProtectedModal(false)}
+                  className={`h-7 px-3.5 rounded-[4px] border text-[12px] font-medium ${controlBtn}`}
+                >
+                  Done
+                </button>
               </div>
             </div>
           </div>

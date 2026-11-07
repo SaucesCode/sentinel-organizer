@@ -44,4 +44,9 @@ contextBridge.exposeInMainWorld('sentinelAPI', {
   // Empty Folder Janitor
   scanEmptyFolders: (dirPath) => ipcRenderer.invoke('fs:scan-empty-folders', dirPath),
   deleteEmptyFolders: (folderPaths) => ipcRenderer.invoke('fs:delete-empty-folders', folderPaths),
+
+  // Protected & Excluded Subfolders
+  getExcludedFolders: () => ipcRenderer.invoke('fs:get-excluded-folders'),
+  addExcludedFolder: (payload) => ipcRenderer.invoke('fs:add-excluded-folder', payload),
+  removeExcludedFolder: (folderPath) => ipcRenderer.invoke('fs:remove-excluded-folder', folderPath),
 });
